@@ -138,6 +138,14 @@ class Config:
         current_mode = self.get("mode", "both")
         return current_mode == mode or current_mode == "both"
 
+    def load_config(self, config_path: str) -> None:
+        """Load configuration from specified file."""
+        if not os.path.exists(config_path):
+            raise FileNotFoundError(f"Config file {config_path} not found")
+
+        self.config_path = config_path
+        self._config = self._load_config()
+
     def save_updated_config(self, updates: Dict[str, Any]) -> None:
         """Save updated configuration to file."""
         updated_config = self._deep_merge(self._config, updates)

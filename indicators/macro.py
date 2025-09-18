@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 
 from indicators.base import MacroIndicator, AssetTrendIndicator, safe_float_conversion, calculate_percentage_change
-from data.fred import fred_api
+# FRED API is now injected via data parameter in calculate() methods
 from data.yahoo import yahoo_api
 
 

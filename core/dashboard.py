@@ -13,8 +13,10 @@ from core.config import config
 from indicators.macro import create_macro_indicators, create_trend_indicators
 from indicators.panic import create_panic_indicators, calculate_panic_score
 from indicators.commodity import create_commodity_indicators, get_required_series
-from data.fred import fred_api
-from data.realtime import realtime_data
+from indicators.technical import create_technical_indicators
+from data.fred import FredAPI
+from data.crypto import CryptoAPI
+from data.realtime import RealTimeDataAggregator
 
 
 @dataclass
@@ -33,12 +35,23 @@ class RiskDashboard:
     """Main dashboard orchestrator for risk indicators."""
 
     def __init__(self):
+        # Initialize APIs with config keys
+        fred_api_key = config.get("fred_api_key", "")
+        self.fred_api = FredAPI(fred_api_key)
+
+        coingecko_api_key = config.get("coingecko_api_key", "")
+        self.crypto_api = CryptoAPI(coingecko_api_key)
+
+        # Initialize realtime data aggregator with proper APIs
+        self.realtime_data = RealTimeDataAggregator(self.crypto_api, self.fred_api)
+
         self.macro_indicators = create_macro_indicators()
         self.panic_indicators = create_panic_indicators()
         self.commodity_indicators = create_commodity_indicators()
         # Always initialize trend indicators with config tickers
         default_tickers = config.get("tickers", ["SPY", "QQQ", "IWM"])
         self.trend_indicators = create_trend_indicators(default_tickers)
+        self.technical_indicators = create_technical_indicators(default_tickers)
         self.last_update = None
         self.last_results = {}
 
@@ -48,6 +61,7 @@ class RiskDashboard:
             tickers = config.get("trend_tickers", ["SPY", "QQQ", "IWM"])
 
         self.trend_indicators = create_trend_indicators(tickers)
+        self.technical_indicators = create_technical_indicators(tickers)
 
     def update_all_indicators(self) -> Dict[str, Any]:
         """Update all indicators with fresh data."""
@@ -56,9 +70,10 @@ class RiskDashboard:
             "panic": {},
             "commodity": {},
             "trend": {},
+            "technical": {},
             "metadata": {
                 "update_time": datetime.now().isoformat(),
-                "data_freshness": realtime_data.check_data_freshness()
+                "data_freshness": self.realtime_data.check_data_freshness()
             }
         }
 
@@ -84,7 +99,9 @@ class RiskDashboard:
         # Update panic indicators
         for name, indicator in self.panic_indicators.items():
             try:
-                result = indicator.update({}, config.data)
+                # Pass realtime data to panic indicators
+                panic_data = {"realtime_data": self.realtime_data}
+                result = indicator.update(panic_data, config.data)
                 results["panic"][name] = result
             except Exception as e:
                 print(f"[warn] Failed to update panic indicator {name}: {e}")
@@ -98,6 +115,15 @@ class RiskDashboard:
             except Exception as e:
                 print(f"[warn] Failed to update trend indicator {name}: {e}")
                 results["trend"][name] = {"ok": None, "error": str(e)}
+
+        # Update technical indicators
+        for name, indicator in self.technical_indicators.items():
+            try:
+                result = indicator.update({}, config.data)
+                results["technical"][name] = result
+            except Exception as e:
+                print(f"[warn] Failed to update technical indicator {name}: {e}")
+                results["technical"][name] = {"ok": None, "error": str(e)}
 
         # Calculate panic score
         results["panic_score"] = calculate_panic_score(self.panic_indicators, config.data)
@@ -125,7 +151,7 @@ class RiskDashboard:
         start_date = config.get("data_start_date", "2015-01-01")
         for series_id in series_ids:
             try:
-                df = fred_api.fetch_series(series_id, start_date)
+                df = self.fred_api.fetch_series(series_id, start_date)
                 if not df.empty:
                     macro_data[series_id] = df
             except Exception as e:
@@ -134,32 +160,31 @@ class RiskDashboard:
         return macro_data
 
     def format_table_output(self, show_details: bool = False) -> str:
-        """Format dashboard output as a table."""
+        """Format dashboard output with separate tables for indicators and assets."""
         if not self.last_results:
             return "No data available. Run update_all_indicators() first."
 
-        rows = []
+        # Create indicators table (macro, commodity, panic)
+        indicator_rows = []
+        indicator_rows.extend(self._format_macro_indicators())
+        indicator_rows.extend(self._format_commodity_indicators())
+        indicator_rows.extend(self._format_panic_indicators())
 
-        # Add macro indicators
-        rows.extend(self._format_macro_indicators())
+        indicators_table = self._create_formatted_table(indicator_rows, show_details, "MARKET INDICATORS")
 
-        # Add commodity indicators
-        rows.extend(self._format_commodity_indicators())
-
-        # Add panic indicators
-        rows.extend(self._format_panic_indicators())
-
-        # Add trend indicators
+        # Create assets table (trend, technical)
+        asset_rows = []
         if self.trend_indicators:
-            rows.extend(self._format_trend_indicators())
+            asset_rows.extend(self._format_trend_indicators())
+        if self.technical_indicators:
+            asset_rows.extend(self._format_technical_indicators())
 
-        # Create table
-        table = self._create_formatted_table(rows, show_details)
+        assets_table = self._create_formatted_table(asset_rows, show_details, "ASSET ANALYSIS")
 
         # Add summary
         summary = self._create_summary()
 
-        return f"{table}\n\n{summary}"
+        return f"{indicators_table}\n\n{assets_table}\n\n{summary}"
 
     def _format_macro_indicators(self) -> List[IndicatorRow]:
         """Format macro indicators for table display."""
@@ -209,6 +234,19 @@ class RiskDashboard:
             result = trend_results.get(name, {})
             rows.append(self._format_indicator_row(
                 indicator, result, "Trend", name
+            ))
+
+        return rows
+
+    def _format_technical_indicators(self) -> List[IndicatorRow]:
+        """Format technical indicators for table display."""
+        rows = []
+        technical_results = self.last_results.get("technical", {})
+
+        for name, indicator in self.technical_indicators.items():
+            result = technical_results.get(name, {})
+            rows.append(self._format_indicator_row(
+                indicator, result, "Technical", name
             ))
 
         return rows
@@ -269,7 +307,8 @@ class RiskDashboard:
             "food_inflation": "food_inflation_threshold_pct",
             "metals_inflation": "metals_inflation_threshold_pct",
             "import_inflation": "import_inflation_threshold_pct",
-            "lumber_inflation": "lumber_inflation_threshold_pct"
+            "lumber_inflation": "lumber_inflation_threshold_pct",
+            "composite_inflation": "composite_inflation_threshold_pct"
         }
 
         if key in commodity_thresholds:
@@ -292,8 +331,24 @@ class RiskDashboard:
             "lei": "<= -2% (6m)"
         }
 
+        # Handle technical indicators specifically first
+        if "reclaim" in key.lower():
+            buffer_pct = result.get("buffer_pct", 2.0)
+            return f"SMA200 cross ±{buffer_pct}%"
+        elif "momentum" in key.lower():
+            return "50/200 SMA cross"
+        elif "squeeze" in key.lower():
+            squeeze_thresh = config.get("squeeze_threshold_pct", 5.0)
+            expansion_thresh = config.get("expansion_threshold_pct", 3.0)
+            return f"BB <{squeeze_thresh}% → >{expansion_thresh}%"
+        elif "breadth" in key.lower():
+            threshold = config.get("breadth_healthy_threshold", 60.0)
+            return f">= {threshold}% new highs"
+        elif "dominance" in key.lower():
+            return "BTC vs ETH trend"
+
         # For trend indicators, show the actual SMA threshold value
-        if hasattr(indicator, 'ticker'):
+        if hasattr(indicator, 'ticker') and ("30d" in indicator.name or "200d" in indicator.name):
             # Check if it's a 30-day or 200-day indicator
             if "30d" in indicator.name:
                 sma_value = result.get("sma30")
@@ -332,19 +387,59 @@ class RiskDashboard:
         """Format current value for display."""
         latest = result.get("latest")
 
+        # Handle technical indicators specifically
+        signal = result.get("signal")
+        if signal:
+            # For reclaim/momentum indicators, show the signal
+            if signal in ["reclaim", "loss", "golden_cross", "death_cross"]:
+                return signal.replace("_", " ").title()
+            elif signal in ["squeeze_expansion", "squeeze", "expansion"]:
+                return signal.replace("_", " ").title()
+            # For BTC dominance
+            elif signal in ["btc_leading", "alt_season", "flight_to_btc", "crypto_dump", "mixed"]:
+                return signal.replace("_", " ").title()
+
+        # For breadth indicator, show the percentage
+        breadth_pct = result.get("breadth_pct")
+        if breadth_pct is not None:
+            return f"{breadth_pct:.1f}%"
+
+        # For momentum indicators, show the spread
+        spread = result.get("spread")
+        if spread is not None:
+            return f"{spread:.2f}%"
+
+        # For squeeze indicators, show BB width
+        bb_width = result.get("bb_width")
+        if bb_width is not None:
+            return f"{bb_width:.1f}%"
+
+        # For BTC dominance, show the performance spread
+        btc_performance = result.get("btc_performance")
+        eth_performance = result.get("eth_performance")
+        if btc_performance is not None and eth_performance is not None:
+            spread = btc_performance - eth_performance
+            return f"{spread:.2f}%"
+
         # For commodity indicators, check for specific inflation values
         if latest is None:
             # Check for max inflation values in commodity indicators
             max_food = result.get("max_food_inflation")
             max_metals = result.get("max_metals_inflation")
-            max_import = result.get("max_import_inflation")
+            max_import = result.get("max_import_inflation")  # Legacy fallback
+            composite_pressure = result.get("composite_pressure")  # New import indicator
+            composite_score = result.get("composite_score")
 
             if max_food is not None:
                 return f"{max_food:.1f}%"
             elif max_metals is not None:
                 return f"{max_metals:.1f}%"
+            elif composite_pressure is not None:
+                return f"{composite_pressure:.1f}%"
             elif max_import is not None:
                 return f"{max_import:.1f}%"
+            elif composite_score is not None:
+                return f"{composite_score:.1f}%"
             else:
                 return "N/A"
 
@@ -393,10 +488,10 @@ class RiskDashboard:
 
         return " | ".join(details) if details else ""
 
-    def _create_formatted_table(self, rows: List[IndicatorRow], show_details: bool) -> str:
+    def _create_formatted_table(self, rows: List[IndicatorRow], show_details: bool, title: str = "") -> str:
         """Create formatted table from indicator rows."""
         if not rows:
-            return "No indicators to display."
+            return f"=== {title} ===\nNo indicators to display."
 
         # Calculate column widths
         max_name = max(len(row.name) for row in rows)
@@ -429,8 +524,11 @@ class RiskDashboard:
         if show_details:
             separator += "-" * 20
 
-        # Create rows
-        table_rows = [header, separator]
+        # Create table with title
+        table_rows = []
+        if title:
+            table_rows.append(f"=== {title} ===")
+        table_rows.extend([header, separator])
 
         for row in rows:
             table_row = (

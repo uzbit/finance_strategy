@@ -151,5 +151,5 @@ class FredAPI:
         }
 
 
-# Global instance for easy access
-fred_api = FredAPI()
+# Note: This module provides the FredAPI class.
+# Instantiation should be done by the caller with proper API key.

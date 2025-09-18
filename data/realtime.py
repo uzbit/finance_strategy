@@ -11,9 +11,9 @@ import asyncio
 import concurrent.futures
 from dataclasses import dataclass
 
-from data.fred import fred_api
+from data.fred import FredAPI
 from data.yahoo import yahoo_api
-from data.crypto import crypto_api
+from data.crypto import CryptoAPI
 from core.config import config
 
 
@@ -31,12 +31,14 @@ class MarketSnapshot:
 class RealTimeDataAggregator:
     """Aggregates real-time data from multiple sources for panic monitoring."""
 
-    def __init__(self):
+    def __init__(self, crypto_api: CryptoAPI, fred_api: FredAPI):
         self.last_snapshot = None
+        self.crypto_api = crypto_api
+        self.fred_api = fred_api
         self.data_sources = {
-            "fred": fred_api,
+            "fred": self.fred_api,
             "yahoo": yahoo_api,
-            "crypto": crypto_api
+            "crypto": self.crypto_api
         }
 
     def get_market_snapshot(self) -> MarketSnapshot:
@@ -141,8 +143,8 @@ class RealTimeDataAggregator:
 
         try:
             # Get latest Treasury yields from FRED (daily data)
-            ten_year = fred_api.get_latest_value("DGS10", "2023-01-01")
-            two_year = fred_api.get_latest_value("DGS2", "2023-01-01")
+            ten_year = self.fred_api.get_latest_value("DGS10", "2023-01-01")
+            two_year = self.fred_api.get_latest_value("DGS2", "2023-01-01")
 
             if ten_year and two_year:
                 rates_data["ten_year_yield"] = ten_year
@@ -171,12 +173,11 @@ class RealTimeDataAggregator:
             crypto_data["eth_performance"] = crypto_perf.get("ETH-USD")
 
             # Stablecoin stress
-            coingecko_key = config.get("coingecko_api_key")
-            stablecoin_stress = crypto_api.check_stablecoin_stress(coingecko_key)
+            stablecoin_stress = self.crypto_api.check_stablecoin_stress()
             crypto_data["stablecoin_stress"] = stablecoin_stress
 
             # Fear & Greed Index
-            fear_greed = crypto_api.get_crypto_fear_greed_index()
+            fear_greed = self.crypto_api.get_crypto_fear_greed_index()
             if fear_greed:
                 crypto_data["fear_greed_index"] = fear_greed["value"]
 
@@ -279,5 +280,5 @@ class RealTimeDataAggregator:
         return freshness
 
 
-# Global instance for easy access
-realtime_data = RealTimeDataAggregator()
+# Note: This module provides the RealTimeDataAggregator class.
+# Instantiation should be done by the caller with proper API keys.

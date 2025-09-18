@@ -14,7 +14,8 @@ import time
 class CryptoAPI:
     """Cryptocurrency data aggregator."""
 
-    def __init__(self):
+    def __init__(self, coingecko_api_key: str = ""):
+        self.coingecko_api_key = coingecko_api_key
         self._cache = {}
         self._cache_timeout = 300  # 5 minutes
 
@@ -37,7 +38,7 @@ class CryptoAPI:
             print(f"[warn] Binance API failed for {symbol}: {e}")
             return None
 
-    def get_coingecko_data(self, coin_id: str, api_key: str = None) -> Dict[str, Any]:
+    def get_coingecko_data(self, coin_id: str) -> Dict[str, Any]:
         """Get comprehensive data from CoinGecko API."""
         cache_key = f"coingecko_{coin_id}"
 
@@ -59,8 +60,8 @@ class CryptoAPI:
             }
 
             headers = {}
-            if api_key:
-                headers["x-cg-demo-api-key"] = api_key
+            if self.coingecko_api_key:
+                headers["x-cg-demo-api-key"] = self.coingecko_api_key
 
             response = requests.get(url, params=params, headers=headers, timeout=15)
             response.raise_for_status()
@@ -84,7 +85,7 @@ class CryptoAPI:
             print(f"[warn] CoinGecko API failed for {coin_id}: {e}")
             return {}
 
-    def get_stablecoin_prices(self, api_key: str = None) -> Dict[str, float]:
+    def get_stablecoin_prices(self) -> Dict[str, float]:
         """Get current stablecoin prices to detect depegging."""
         stablecoins = {
             "tether": "USDT",
@@ -97,7 +98,7 @@ class CryptoAPI:
 
         for coin_id, symbol in stablecoins.items():
             try:
-                data = self.get_coingecko_data(coin_id, api_key)
+                data = self.get_coingecko_data(coin_id)
                 price = data.get("price_usd")
                 if price:
                     prices[symbol] = price
@@ -106,10 +107,10 @@ class CryptoAPI:
 
         return prices
 
-    def check_stablecoin_stress(self, api_key: str = None, depeg_threshold: float = 0.995,
+    def check_stablecoin_stress(self, depeg_threshold: float = 0.995,
                               duration_minutes: int = 15) -> Dict[str, Any]:
         """Check for stablecoin depegging events."""
-        prices = self.get_stablecoin_prices(api_key)
+        prices = self.get_stablecoin_prices()
 
         stress_signals = {}
         depegged_coins = []
@@ -132,7 +133,7 @@ class CryptoAPI:
             "timestamp": datetime.now().isoformat()
         }
 
-    def get_crypto_correlation(self, symbols: List[str], api_key: str = None,
+    def get_crypto_correlation(self, symbols: List[str],
                              timeframe: str = "1d") -> Dict[str, float]:
         """Get crypto price movements for correlation analysis."""
         performance = {}
@@ -152,7 +153,7 @@ class CryptoAPI:
                 continue
 
             try:
-                data = self.get_coingecko_data(coin_id, api_key)
+                data = self.get_coingecko_data(coin_id)
                 price_change = data.get("price_change_24h")
                 if price_change is not None:
                     performance[symbol] = price_change
@@ -229,5 +230,5 @@ class CryptoAPI:
         }
 
 
-# Global instance for easy access
-crypto_api = CryptoAPI()
+# Note: This module provides the CryptoAPI class.
+# Instantiation should be done by the caller with proper API key.

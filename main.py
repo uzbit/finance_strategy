@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Optional
 
 # Import the modular components
-from core.dashboard import dashboard
+from core.dashboard import RiskDashboard
 from core.config import config
 
 
@@ -34,6 +34,9 @@ def run_dashboard(show_details: bool = False,
         Formatted table output
     """
     try:
+        # Create dashboard instance
+        dashboard = RiskDashboard()
+
         # Initialize trend indicators if specified (otherwise use default from config)
         if trend_tickers:
             dashboard.initialize_trend_indicators(trend_tickers)
@@ -63,6 +66,9 @@ def run_dashboard(show_details: bool = False,
 def run_quick_check() -> str:
     """Run a quick check of just the most critical indicators."""
     try:
+        # Create dashboard instance
+        dashboard = RiskDashboard()
+
         # Update only panic indicators for speed
         results = dashboard.update_all_indicators()
 
@@ -100,12 +106,14 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python main.py                    # Full dashboard
+  python main.py                    # Full dashboard (default config)
+  python main.py --conservative     # Full dashboard (conservative thresholds)
   python main.py --details          # Full dashboard with details
   python main.py --quick            # Quick panic check only
   python main.py --panic-only       # Panic indicators only
   python main.py --macro-only       # Macro indicators only
   python main.py --tickers SPY QQQ  # Custom trend tickers
+  python main.py --config custom.json  # Custom config file
         """
     )
 
@@ -145,6 +153,12 @@ Examples:
     )
 
     parser.add_argument(
+        "--conservative",
+        action="store_true",
+        help="Use conservative thresholds (config_conservative.json)"
+    )
+
+    parser.add_argument(
         "--version",
         action="store_true",
         help="Show version information"
@@ -158,14 +172,24 @@ Examples:
         print("Modular architecture with macro and panic indicators")
         return
 
-    # Load custom config if specified
+    # Load config based on flags
     if args.config:
+        # Custom config file specified
         try:
             config.load_config(args.config)
             print(f"Loaded config from: {args.config}")
         except Exception as e:
             print(f"Error loading config: {e}")
             return
+    elif args.conservative:
+        # Use conservative config
+        try:
+            config.load_config("config_conservative.json")
+            print("Using conservative thresholds (config_conservative.json)")
+        except Exception as e:
+            print(f"Error loading conservative config: {e}")
+            print("Falling back to default config.json")
+    # Otherwise use default config.json
 
     # Handle quick check
     if args.quick:
@@ -199,6 +223,7 @@ def summarize(show_details: bool = False) -> str:
 def get_panic_score() -> dict:
     """Get current panic score."""
     try:
+        dashboard = RiskDashboard()
         dashboard.update_all_indicators()
         return dashboard.last_results.get("panic_score", {})
     except Exception as e:
@@ -208,6 +233,7 @@ def get_panic_score() -> dict:
 def get_warning_count() -> dict:
     """Get warning count by category."""
     try:
+        dashboard = RiskDashboard()
         dashboard.update_all_indicators()
         return dashboard.get_warning_count()
     except Exception as e:

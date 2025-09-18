@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 
 from indicators.base import PanicIndicator, safe_float_conversion, calculate_percentage_change
-from data.realtime import realtime_data
+# Realtime data is now passed via data parameter in calculate() methods
 
 
 class VIXSpikeIndicator(PanicIndicator):
@@ -24,6 +24,10 @@ class VIXSpikeIndicator(PanicIndicator):
 
     def calculate(self, data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
         """True if VIX > panic threshold."""
+        realtime_data = data.get("realtime_data")
+        if not realtime_data:
+            return {"ok": None, "latest": None, "threshold": None, "error": "No realtime data"}
+
         snapshot = realtime_data.get_market_snapshot()
         vix_level = snapshot.equity_data.get("vix_level")
 
@@ -55,6 +59,10 @@ class EquityStressIndicator(PanicIndicator):
 
     def calculate(self, data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
         """True if SPY intraday drop > threshold."""
+        realtime_data = data.get("realtime_data")
+        if not realtime_data:
+            return {"ok": None, "latest": None, "threshold": None, "error": "No realtime data"}
+
         snapshot = realtime_data.get_market_snapshot()
 
         # Check daily performance first
@@ -93,6 +101,10 @@ class VolumeStressIndicator(PanicIndicator):
 
     def calculate(self, data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
         """True if volume ratio > threshold."""
+        realtime_data = data.get("realtime_data")
+        if not realtime_data:
+            return {"ok": None, "latest": None, "threshold": None, "error": "No realtime data"}
+
         snapshot = realtime_data.get_market_snapshot()
         volume_ratio = snapshot.equity_data.get("spy_volume_ratio")
 
@@ -124,6 +136,10 @@ class CreditStressIndicator(PanicIndicator):
 
     def calculate(self, data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
         """True if HYG performance < threshold."""
+        realtime_data = data.get("realtime_data")
+        if not realtime_data:
+            return {"ok": None, "latest": None, "threshold": None, "error": "No realtime data"}
+
         snapshot = realtime_data.get_market_snapshot()
         hyg_perf = snapshot.credit_data.get("hyg_performance")
 
@@ -155,6 +171,10 @@ class FlightToQualityIndicator(PanicIndicator):
 
     def calculate(self, data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
         """True if TLT performance > threshold."""
+        realtime_data = data.get("realtime_data")
+        if not realtime_data:
+            return {"ok": None, "latest": None, "threshold": None, "error": "No realtime data"}
+
         snapshot = realtime_data.get_market_snapshot()
         tlt_perf = snapshot.credit_data.get("tlt_performance")
 
@@ -186,6 +206,10 @@ class DollarStrengthIndicator(PanicIndicator):
 
     def calculate(self, data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
         """True if dollar up during equity stress."""
+        realtime_data = data.get("realtime_data")
+        if not realtime_data:
+            return {"ok": None, "latest": None, "threshold": None, "error": "No realtime data"}
+
         snapshot = realtime_data.get_market_snapshot()
 
         dollar_perf = snapshot.rates_data.get("dollar_performance")
@@ -226,6 +250,10 @@ class CryptoStressIndicator(PanicIndicator):
 
     def calculate(self, data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
         """True if BTC performance < threshold."""
+        realtime_data = data.get("realtime_data")
+        if not realtime_data:
+            return {"ok": None, "latest": None, "threshold": None, "error": "No realtime data"}
+
         snapshot = realtime_data.get_market_snapshot()
         btc_perf = snapshot.crypto_data.get("btc_performance")
 
@@ -257,6 +285,10 @@ class StablecoinStressIndicator(PanicIndicator):
 
     def calculate(self, data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
         """True if any major stablecoin depegged."""
+        realtime_data = data.get("realtime_data")
+        if not realtime_data:
+            return {"ok": None, "latest": None, "threshold": None, "error": "No realtime data"}
+
         snapshot = realtime_data.get_market_snapshot()
         stablecoin_stress = snapshot.crypto_data.get("stablecoin_stress", {})
 
@@ -283,6 +315,10 @@ class CommodityStressIndicator(PanicIndicator):
 
     def calculate(self, data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
         """True if oil volatility > threshold."""
+        realtime_data = data.get("realtime_data")
+        if not realtime_data:
+            return {"ok": None, "latest": None, "threshold": None, "error": "No realtime data"}
+
         snapshot = realtime_data.get_market_snapshot()
         oil_perf = snapshot.commodity_data.get("oil_performance")
 
@@ -318,6 +354,10 @@ class CrossAssetCorrelationIndicator(PanicIndicator):
 
     def calculate(self, data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
         """True if cross-asset correlations indicate systemic stress."""
+        realtime_data = data.get("realtime_data")
+        if not realtime_data:
+            return {"ok": None, "latest": None, "threshold": None, "error": "No realtime data"}
+
         correlation_signals = realtime_data.get_cross_asset_correlation()
 
         everything_down = correlation_signals.get("everything_down", False)
@@ -347,6 +387,10 @@ class MarketStructureIndicator(PanicIndicator):
 
     def calculate(self, data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
         """Detect market structure stress via multiple signals."""
+        realtime_data = data.get("realtime_data")
+        if not realtime_data:
+            return {"ok": None, "latest": None, "threshold": None, "error": "No realtime data"}
+
         snapshot = realtime_data.get_market_snapshot()
 
         # Multiple stress signals

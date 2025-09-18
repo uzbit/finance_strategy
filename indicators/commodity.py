@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 
 from indicators.base import MacroIndicator, safe_float_conversion, calculate_percentage_change
-from data.fred import fred_api
+# FRED API is now injected via data parameter in calculate() methods
 
 
 class EnergyInflationIndicator(MacroIndicator):
@@ -213,47 +213,150 @@ class MetalsInflationIndicator(MacroIndicator):
 
 
 class ImportInflationIndicator(MacroIndicator):
-    """Import price inflation pressure."""
+    """Import price inflation pressure using BLS Import Price Indexes."""
 
     def __init__(self):
         super().__init__(
             name="Import Inflation Pressure",
-            description="Import price index for fuels and industrial supplies",
-            series_id="IMP3000"  # Import price index - fuels and lubricants
+            description="Core + Energy weighted import price inflation",
+            series_id="IR"  # All imports (headline)
         )
 
     def calculate(self, data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
-        """True if import prices up >threshold% YoY."""
-        fuels_df = data.get("IMP3000")  # Import fuels & lubricants
-        industrial_df = data.get("IMP1000")  # Import all commodities
+        """Calculate import inflation pressure using Core + Energy methodology."""
+        # Get the data series
+        headline_df = data.get("IR")           # All imports (headline)
+        core_df = data.get("IREXFDFLS")        # Ex food & fuels (preferred)
+        alt_core_df = data.get("IREXFUELS")    # Ex fuels (fallback)
+        energy_df = data.get("IR10")           # Fuels & lubricants
+        usd_df = data.get("DTWEXBGS")          # Broad USD index (optional)
 
+        # Configuration
         threshold_pct = config.get("import_inflation_threshold_pct", 10.0)
+        amber_threshold = config.get("import_inflation_amber_threshold", 2.0)
+        red_threshold = config.get("import_inflation_red_threshold", 4.0)
+        fast_threshold = config.get("import_inflation_3m_threshold", 6.0)
 
-        import_changes = []
+        # Weights for Core + Energy mix
+        core_weight = config.get("import_inflation_core_weight", 0.75)
+        energy_weight = config.get("import_inflation_energy_weight", 0.25)
+
+        # FX adjustment (if enabled)
+        fx_adjustment = config.get("import_inflation_fx_adjustment", False)
+        fx_beta = config.get("import_inflation_fx_beta", 0.4)
+
         import_data = {}
 
-        # Calculate YoY changes for available series
-        for name, df in [("fuels", fuels_df), ("commodities", industrial_df)]:
-            if df is not None and not df.empty and len(df) >= 12:  # 12 months
-                values = df["value"].dropna()
+        # Calculate headline YoY for simple fallback
+        headline_yoy = None
+        if headline_df is not None and not headline_df.empty and len(headline_df) >= 12:
+            values = headline_df["value"].dropna()
+            if len(values) >= 12:
                 latest = safe_float_conversion(values.iloc[-1])
-                year_ago = safe_float_conversion(values.iloc[-12] if len(values) >= 12 else values.iloc[0])
-
+                year_ago = safe_float_conversion(values.iloc[-12])
                 if latest is not None and year_ago is not None:
-                    yoy_change = calculate_percentage_change(latest, year_ago)
-                    import_changes.append(yoy_change)
-                    import_data[f"{name}_yoy"] = yoy_change
-                    import_data[f"{name}_latest"] = latest
+                    headline_yoy = calculate_percentage_change(latest, year_ago)
+                    import_data["headline_yoy"] = headline_yoy
 
-        if not import_changes:
-            return {"ok": None, "max_import_inflation": None}
+        # Calculate core inflation (prefer ex-food&fuels, fallback to ex-fuels)
+        core_yoy = None
+        core_source = None
+        for source_name, df in [("ex_food_fuels", core_df), ("ex_fuels", alt_core_df)]:
+            if df is not None and not df.empty and len(df) >= 12:
+                values = df["value"].dropna()
+                if len(values) >= 12:
+                    latest = safe_float_conversion(values.iloc[-1])
+                    year_ago = safe_float_conversion(values.iloc[-12])
+                    if latest is not None and year_ago is not None:
+                        core_yoy = calculate_percentage_change(latest, year_ago)
+                        core_source = source_name
+                        import_data[f"core_yoy_{source_name}"] = core_yoy
+                        break
 
-        max_import_inflation = max(import_changes)
+        # Calculate energy inflation
+        energy_yoy = None
+        if energy_df is not None and not energy_df.empty and len(energy_df) >= 12:
+            values = energy_df["value"].dropna()
+            if len(values) >= 12:
+                latest = safe_float_conversion(values.iloc[-1])
+                year_ago = safe_float_conversion(values.iloc[-12])
+                if latest is not None and year_ago is not None:
+                    energy_yoy = calculate_percentage_change(latest, year_ago)
+                    import_data["energy_yoy"] = energy_yoy
+
+        # Calculate 3-month annualized for headline (turning indicator)
+        headline_3m_ann = None
+        if headline_df is not None and not headline_df.empty and len(headline_df) >= 3:
+            values = headline_df["value"].dropna()
+            if len(values) >= 3:
+                latest = safe_float_conversion(values.iloc[-1])
+                three_months_ago = safe_float_conversion(values.iloc[-3])
+                if latest is not None and three_months_ago is not None:
+                    quarterly_change = latest / three_months_ago
+                    headline_3m_ann = (quarterly_change ** 4 - 1) * 100
+                    import_data["headline_3m_ann"] = headline_3m_ann
+
+        # Calculate USD adjustment if enabled
+        usd_yoy = None
+        if fx_adjustment and usd_df is not None and not usd_df.empty and len(usd_df) >= 12:
+            # Convert daily USD to monthly average, then calculate YoY
+            usd_values = usd_df["value"].dropna()
+            if len(usd_values) >= 250:  # ~12 months of daily data
+                # Simple approach: use the values as if they're already monthly
+                # (In practice, you'd want to resample daily to monthly first)
+                latest_usd = safe_float_conversion(usd_values.iloc[-1])
+                year_ago_usd = safe_float_conversion(usd_values.iloc[-250])  # ~250 trading days
+                if latest_usd is not None and year_ago_usd is not None:
+                    usd_yoy = calculate_percentage_change(latest_usd, year_ago_usd)
+                    import_data["usd_yoy"] = usd_yoy
+
+        # Calculate composite pressure based on available data
+        composite_pressure = None
+        method_used = None
+
+        if core_yoy is not None and energy_yoy is not None:
+            # Method B: Core + Energy mix
+            composite_pressure = (core_weight * core_yoy) + (energy_weight * energy_yoy)
+            method_used = f"core_energy_mix_{core_source}"
+
+            # Apply FX adjustment if enabled
+            if fx_adjustment and usd_yoy is not None:
+                fx_adjustment_value = fx_beta * usd_yoy
+                composite_pressure -= fx_adjustment_value
+                method_used += "_fx_adjusted"
+                import_data["fx_adjustment"] = fx_adjustment_value
+
+        elif headline_yoy is not None:
+            # Method A: Headline-only fallback
+            composite_pressure = headline_yoy
+            method_used = "headline_only"
+
+        # Determine alert level
+        alert_level = "normal"
+        if composite_pressure is not None:
+            # Check for red alert
+            if composite_pressure > red_threshold or (headline_3m_ann and headline_3m_ann > fast_threshold):
+                alert_level = "red"
+            # Check for amber alert
+            elif composite_pressure > amber_threshold and headline_3m_ann and headline_3m_ann > 0:
+                alert_level = "amber"
+
+        # Final result
+        if composite_pressure is None:
+            return {
+                "ok": None,
+                "composite_pressure": None,
+                "alert_level": "no_data",
+                "method_used": None
+            }
 
         result = {
-            "ok": max_import_inflation >= threshold_pct,
-            "max_import_inflation": max_import_inflation,
-            "threshold": threshold_pct
+            "ok": composite_pressure >= threshold_pct,
+            "composite_pressure": composite_pressure,
+            "alert_level": alert_level,
+            "method_used": method_used,
+            "threshold": threshold_pct,
+            "latest": composite_pressure  # For display formatting
         }
         result.update(import_data)
 
@@ -310,9 +413,74 @@ class CompositeInflationIndicator(MacroIndicator):
 
     def calculate(self, data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
         """Composite inflation score from multiple commodity categories."""
-        # This will be calculated by aggregating results from other indicators
-        # For now, return a placeholder
-        return {"ok": None, "composite_score": None}
+        # Create instances of other indicators to get their values
+        energy_indicator = EnergyInflationIndicator()
+        food_indicator = FoodInflationIndicator()
+        metals_indicator = MetalsInflationIndicator()
+        lumber_indicator = LumberInflationIndicator()
+
+        # Calculate individual indicator results
+        energy_result = energy_indicator.calculate(data, config)
+        food_result = food_indicator.calculate(data, config)
+        metals_result = metals_indicator.calculate(data, config)
+        lumber_result = lumber_indicator.calculate(data, config)
+
+        # Extract inflation rates
+        inflation_rates = []
+        weights = []
+        categories = []
+
+        # Energy (weight: 30% - high impact on everything)
+        energy_inflation = energy_result.get("max_inflation")
+        if energy_inflation is not None:
+            inflation_rates.append(energy_inflation)
+            weights.append(0.30)
+            categories.append("energy")
+
+        # Food (weight: 25% - essential commodity)
+        food_inflation = food_result.get("max_food_inflation")
+        if food_inflation is not None:
+            inflation_rates.append(food_inflation)
+            weights.append(0.25)
+            categories.append("food")
+
+        # Metals (weight: 25% - industrial input)
+        metals_inflation = metals_result.get("max_metals_inflation")
+        if metals_inflation is not None:
+            inflation_rates.append(metals_inflation)
+            weights.append(0.25)
+            categories.append("metals")
+
+        # Lumber (weight: 20% - housing/construction)
+        lumber_inflation = lumber_result.get("yoy_change")
+        if lumber_inflation is not None:
+            inflation_rates.append(lumber_inflation)
+            weights.append(0.20)
+            categories.append("lumber")
+
+        if not inflation_rates:
+            return {"ok": None, "composite_score": None, "categories": []}
+
+        # Calculate weighted average
+        total_weight = sum(weights)
+        if total_weight > 0:
+            # Normalize weights
+            normalized_weights = [w / total_weight for w in weights]
+            composite_score = sum(rate * weight for rate, weight in zip(inflation_rates, normalized_weights))
+        else:
+            composite_score = sum(inflation_rates) / len(inflation_rates)
+
+        # Threshold for composite inflation
+        threshold = config.get("composite_inflation_threshold_pct", 12.0)
+
+        return {
+            "ok": composite_score >= threshold,
+            "composite_score": composite_score,
+            "threshold": threshold,
+            "categories": categories,
+            "component_rates": dict(zip(categories, inflation_rates)),
+            "latest": composite_score  # For display formatting
+        }
 
 
 # Factory function to create all commodity indicators
@@ -333,8 +501,8 @@ def get_required_series() -> List[str]:
     """Get list of all FRED series IDs needed for commodity indicators."""
     return [
         # Energy
-        "GASREGCOVW",   # Weekly U.S. Regular Conventional Gasoline Prices (correct)
-        "GASDESW",      # Weekly U.S. Diesel Sales Price (correct)
+        "GASREGCOVW",   # Weekly U.S. Regular Conventional Gasoline Prices
+        "GASDESW",      # Weekly U.S. Diesel Sales Price
         "DHHNGSP",      # Daily Henry Hub natural gas spot price
 
         # Food/Agriculture (using actual FRED agricultural series)
@@ -347,7 +515,10 @@ def get_required_series() -> List[str]:
         "WPU06",        # PPI: Industrial chemicals
         "WPU08",        # PPI: Lumber and wood products
 
-        # Import prices (correct BLS series)
-        "IMP3000",      # Import price index: Fuels and lubricants
-        "IMP1000",      # Import price index: All commodities
+        # Import prices (BLS Import Price Indexes - proper methodology)
+        "IR",           # All imports (headline) - Index 2000=100
+        "IREXFDFLS",    # Ex food & fuels - Index Dec 2010=100 (preferred)
+        "IREXFUELS",    # Ex fuels - Index Dec 2001=100 (fallback)
+        "IR10",         # Fuels & lubricants (energy shock)
+        "DTWEXBGS",     # Broad U.S. Dollar Index (daily, for FX adjustment)
     ]
