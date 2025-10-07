@@ -20,7 +20,8 @@ from core.config import config
 def run_dashboard(show_details: bool = False,
                  trend_tickers: Optional[list] = None,
                  panic_only: bool = False,
-                 macro_only: bool = False) -> str:
+                 macro_only: bool = False,
+                 html_output: Optional[str] = None) -> str:
     """
     Run the complete risk dashboard.
 
@@ -29,9 +30,10 @@ def run_dashboard(show_details: bool = False,
         trend_tickers: List of tickers for trend analysis
         panic_only: Show only panic indicators
         macro_only: Show only macro indicators
+        html_output: Path to HTML output file (if None, use terminal output)
 
     Returns:
-        Formatted table output
+        Formatted table output or path to HTML file
     """
     try:
         # Create dashboard instance
@@ -57,7 +59,12 @@ def run_dashboard(show_details: bool = False,
             dashboard.panic_indicators = {}
 
         # Format and return output
-        return dashboard.format_table_output(show_details=show_details)
+        if html_output:
+            output_file = html_output if html_output else "dashboard_output.html"
+            file_path = dashboard.format_html_output(output_file)
+            return f"HTML dashboard generated: {file_path}"
+        else:
+            return dashboard.format_table_output(show_details=show_details)
 
     except Exception as e:
         return f"Error running dashboard: {e}"
@@ -164,6 +171,14 @@ Examples:
         help="Show version information"
     )
 
+    parser.add_argument(
+        "--html",
+        nargs="?",
+        const="dashboard_output.html",
+        metavar="OUTPUT_FILE",
+        help="Generate HTML output instead of terminal output (default: dashboard_output.html)"
+    )
+
     args = parser.parse_args()
 
     # Handle version
@@ -199,11 +214,15 @@ Examples:
 
     # Handle full dashboard
     try:
+        # Determine HTML output file
+        html_file = args.html if args.html else None
+
         output = run_dashboard(
             show_details=args.details,
             trend_tickers=args.tickers,
             panic_only=args.panic_only,
-            macro_only=args.macro_only
+            macro_only=args.macro_only,
+            html_output=html_file
         )
         print(output)
 

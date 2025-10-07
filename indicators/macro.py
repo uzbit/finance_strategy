@@ -363,6 +363,93 @@ class LeadingIndicatorsIndicator(MacroIndicator):
         return {"ok": pct_change <= threshold_pct, "pct_change": pct_change, "latest": latest}
 
 
+class ValidatorQueueIndicator(MacroIndicator):
+    """ETH validator queue health indicator."""
+
+    def __init__(self):
+        super().__init__(
+            name="ETH Validator Exit Pressure",
+            description="Percentage of validator queue that is exits",
+            series_id=None  # Uses BeaconchainAPI, not FRED
+        )
+
+    def get_data_requirements(self) -> Dict[str, Any]:
+        """Get data requirements for this indicator."""
+        return {
+            "source": "beacon",
+            "frequency": "realtime"
+        }
+
+    def calculate(self, data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Calculate entry and exit percentages.
+
+        Warning conditions:
+        - Bull warning: entry % > entry_threshold (validators rushing in - overheated)
+        - Bear warning: exit % > exit_threshold (validators leaving - exodus)
+        """
+        # Get beacon API data from the data dict
+        beacon_data = data.get("beacon_queue")
+        if not beacon_data:
+            return {
+                "ok": None,
+                "exit_pct": None,
+                "entry_pct": None,
+                "entry_validators": None,
+                "exit_validators": None,
+                "total_queue": None,
+                "signal": None
+            }
+
+        # Extract metrics
+        entry_validators = beacon_data.get("beaconchain_entering", 0)
+        exit_validators = beacon_data.get("beaconchain_exiting", 0)
+        total_queue = entry_validators + exit_validators
+
+        if total_queue == 0:
+            return {
+                "ok": None,
+                "exit_pct": None,
+                "entry_pct": None,
+                "entry_validators": entry_validators,
+                "exit_validators": exit_validators,
+                "total_queue": total_queue,
+                "signal": None
+            }
+
+        # Calculate percentages
+        exit_pct = (exit_validators / total_queue) * 100
+        entry_pct = (entry_validators / total_queue) * 100
+
+        # Get thresholds from config
+        entry_threshold = config.get("validator_entry_pct_threshold", 80.0)  # Default: 80% entry is too hot
+        exit_threshold = config.get("validator_exit_pct_threshold", 80.0)    # Default: 80% exit is exodus
+
+        # Determine warning condition
+        signal = None
+        trigger = False
+
+        if entry_pct > entry_threshold:
+            trigger = True
+            signal = "bull_warning"  # Too many validators entering
+        elif exit_pct > exit_threshold:
+            trigger = True
+            signal = "bear_warning"  # Too many validators exiting
+
+        return {
+            "ok": trigger,
+            "exit_pct": exit_pct,
+            "entry_pct": entry_pct,
+            "entry_validators": entry_validators,
+            "exit_validators": exit_validators,
+            "total_queue": total_queue,
+            "entry_threshold": entry_threshold,
+            "exit_threshold": exit_threshold,
+            "signal": signal,
+            "latest": exit_pct  # For standard formatting (show exit %)
+        }
+
+
 class TrendBreakIndicator(AssetTrendIndicator):
     """Asset price trend break indicator (200-day SMA)."""
 
@@ -460,7 +547,8 @@ def create_macro_indicators() -> Dict[str, MacroIndicator]:
         "real_rates": RealRatesIndicator(),
         "inflation": InflationExpectationsIndicator(),
         "oil_vol": OilVolatilityIndicator(),
-        "lei": LeadingIndicatorsIndicator()
+        "lei": LeadingIndicatorsIndicator(),
+        "validator_queue": ValidatorQueueIndicator()
     }
 
 
