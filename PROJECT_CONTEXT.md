@@ -59,6 +59,7 @@ This is a **Financial Risk Dashboard** system that provides comprehensive market
 ## Configuration
 - Default config: `config.json`
 - Conservative mode: `config_conservative.json`
+- Tickers: `tickers.json` (separate file for tracked assets)
 - API keys: FRED, CoinGecko
 - Configurable thresholds for all indicators
 

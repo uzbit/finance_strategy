@@ -10,6 +10,7 @@ from typing import Dict, Any, Optional
 from pathlib import Path
 
 DEFAULT_CONFIG_FILE = "config.json"
+DEFAULT_TICKERS_FILE = "tickers.json"
 
 class Config:
     """Configuration manager for the dashboard."""
@@ -71,6 +72,22 @@ class Config:
             }
         }
 
+    def _load_tickers(self) -> Dict[str, Any]:
+        """Load tickers from tickers.json file."""
+        tickers_path = DEFAULT_TICKERS_FILE
+
+        if not os.path.exists(tickers_path):
+            print(f"[warn] Tickers file {tickers_path} not found. Using defaults.", file=sys.stderr)
+            return {}
+
+        try:
+            with open(tickers_path, 'r') as f:
+                tickers_data = json.load(f)
+            return tickers_data
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"[warn] Tickers file error: {e}. Using defaults.", file=sys.stderr)
+            return {}
+
     def _load_config(self) -> Dict[str, Any]:
         """Load configuration from file with fallback to defaults."""
         default_config = self._get_default_config()
@@ -85,6 +102,12 @@ class Config:
 
             # Deep merge with defaults
             merged_config = self._deep_merge(default_config, file_config)
+
+            # Load and merge tickers from tickers.json
+            tickers_data = self._load_tickers()
+            if tickers_data:
+                merged_config = self._deep_merge(merged_config, tickers_data)
+
             return merged_config
 
         except (json.JSONDecodeError, IOError) as e:

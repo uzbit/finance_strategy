@@ -14,10 +14,15 @@ from indicators.macro import create_macro_indicators, create_trend_indicators
 from indicators.panic import create_panic_indicators, calculate_panic_score
 from indicators.commodity import create_commodity_indicators, get_required_series
 from indicators.technical import create_technical_indicators
+from indicators.crypto_advanced import create_crypto_advanced_indicators
 from data.fred import FredAPI
 from data.crypto import CryptoAPI
 from data.beacon import BeaconchainAPI
 from data.realtime import RealTimeDataAggregator
+from data.derivatives import DerivativesAPI
+from data.glassnode import GlassnodeAPI
+from data.defillama import DeFiLlamaAPI
+from data.deribit import DeribitAPI
 
 
 @dataclass
@@ -61,9 +66,19 @@ class RiskDashboard:
         # Initialize realtime data aggregator with proper APIs
         self.realtime_data = RealTimeDataAggregator(self.crypto_api, self.fred_api)
 
+        # Initialize advanced crypto APIs
+        self.derivatives_api = DerivativesAPI()
+
+        glassnode_api_key = config.get("glassnode_api_key", "")
+        self.glassnode_api = GlassnodeAPI(glassnode_api_key) if glassnode_api_key else None
+
+        self.defillama_api = DeFiLlamaAPI()
+        self.deribit_api = DeribitAPI()
+
         self.macro_indicators = create_macro_indicators()
         self.panic_indicators = create_panic_indicators()
         self.commodity_indicators = create_commodity_indicators()
+        self.crypto_advanced_indicators = create_crypto_advanced_indicators()
         # Always initialize trend indicators with config tickers
         default_tickers = config.get("tickers", ["SPY", "QQQ", "IWM"])
         self.trend_indicators = create_trend_indicators(default_tickers)
@@ -87,6 +102,7 @@ class RiskDashboard:
             "commodity": {},
             "trend": {},
             "technical": {},
+            "crypto_advanced": {},
             "metadata": {
                 "update_time": datetime.now().isoformat(),
                 "data_freshness": self.realtime_data.check_data_freshness()
@@ -141,7 +157,24 @@ class RiskDashboard:
                 print(f"[warn] Failed to update technical indicator {name}: {e}")
                 results["technical"][name] = {"ok": None, "error": str(e)}
 
-        # Calculate panic score
+        # Update crypto advanced indicators
+        for name, indicator in self.crypto_advanced_indicators.items():
+            try:
+                # Prepare data dict with all APIs
+                crypto_data = {
+                    "derivatives_api": self.derivatives_api,
+                    "glassnode_api": self.glassnode_api,
+                    "defillama_api": self.defillama_api,
+                    "deribit_api": self.deribit_api,
+                    "crypto_api": self.crypto_api
+                }
+                result = indicator.update(crypto_data, config.data)
+                results["crypto_advanced"][name] = result
+            except Exception as e:
+                print(f"[warn] Failed to update crypto advanced indicator {name}: {e}")
+                results["crypto_advanced"][name] = {"ok": None, "error": str(e)}
+
+        # Calculate panic score (include crypto_advanced in total)
         results["panic_score"] = calculate_panic_score(self.panic_indicators, config.data)
 
         self.last_results = results
@@ -188,11 +221,12 @@ class RiskDashboard:
         if not self.last_results:
             return "No data available. Run update_all_indicators() first."
 
-        # Create indicators table (macro, commodity, panic)
+        # Create indicators table (macro, commodity, panic, crypto_advanced)
         indicator_rows = []
         indicator_rows.extend(self._format_macro_indicators())
         indicator_rows.extend(self._format_commodity_indicators())
         indicator_rows.extend(self._format_panic_indicators())
+        indicator_rows.extend(self._format_crypto_advanced_indicators())
 
         indicators_table = self._create_formatted_table(indicator_rows, show_details, "MARKET INDICATORS")
 
@@ -239,6 +273,19 @@ class RiskDashboard:
             result = panic_results.get(name, {})
             rows.append(self._format_indicator_row(
                 indicator, result, "Panic", name
+            ))
+
+        return rows
+
+    def _format_crypto_advanced_indicators(self) -> List[IndicatorRow]:
+        """Format crypto advanced indicators for table display."""
+        rows = []
+        crypto_results = self.last_results.get("crypto_advanced", {})
+
+        for name, indicator in self.crypto_advanced_indicators.items():
+            result = crypto_results.get(name, {})
+            rows.append(self._format_indicator_row(
+                indicator, result, "Crypto", name
             ))
 
         return rows
@@ -445,6 +492,29 @@ class RiskDashboard:
 
     def _format_current_value(self, result: Dict[str, Any]) -> str:
         """Format current value for display."""
+        # Handle crypto advanced indicators
+        composite_z = result.get("composite_z")
+        if composite_z is not None:
+            return f"{composite_z:.2f}"
+
+        oi_change_pct = result.get("oi_change_pct")
+        if oi_change_pct is not None:
+            return f"{oi_change_pct:+.1f}%"
+
+        flows_3d_sum = result.get("flows_3d_sum")
+        if flows_3d_sum is not None:
+            # Format in billions
+            return f"${flows_3d_sum/1e9:.2f}B"
+
+        net_issuance_7d = result.get("net_issuance_7d")
+        if net_issuance_7d is not None:
+            # Format in billions
+            return f"${net_issuance_7d/1e9:.2f}B"
+
+        rr25 = result.get("rr25")
+        if rr25 is not None:
+            return f"{rr25:.1f} vol"
+
         # Handle technical indicators specifically
         signal = result.get("signal")
         if signal:
@@ -885,6 +955,11 @@ class RiskDashboard:
             if result.get("ok") is True
         )
 
+        crypto_advanced_warnings = sum(
+            1 for result in self.last_results.get("crypto_advanced", {}).values()
+            if result.get("ok") is True
+        )
+
         # Data freshness
         freshness = self.last_results.get("metadata", {}).get("data_freshness", {})
         market_open = freshness.get("market_open", False)
@@ -895,6 +970,7 @@ class RiskDashboard:
             f"Macro Warnings: {macro_warnings}/{len(self.macro_indicators)}",
             f"Commodity Warnings: {commodity_warnings}/{len(self.commodity_indicators)}",
             f"Panic Score: {total_score}/{len(self.panic_indicators)} ({panic_level.upper()})",
+            f"Crypto Advanced Warnings: {crypto_advanced_warnings}/{len(self.crypto_advanced_indicators)}",
             f"Trend Warnings: {trend_warnings}/{len(self.trend_indicators)}",
             f"Market Open: {'Yes' if market_open else 'No'}",
             f"Last Update: {self.last_update.strftime('%Y-%m-%d %H:%M:%S') if self.last_update else 'Never'}"
@@ -955,6 +1031,7 @@ class RiskDashboard:
         macro_warnings = sum(1 for r in self.last_results.get("macro", {}).values() if r.get("ok") is True)
         commodity_warnings = sum(1 for r in self.last_results.get("commodity", {}).values() if r.get("ok") is True)
         trend_warnings = sum(1 for r in self.last_results.get("trend", {}).values() if r.get("ok") is True)
+        crypto_advanced_warnings = sum(1 for r in self.last_results.get("crypto_advanced", {}).values() if r.get("ok") is True)
 
         freshness = self.last_results.get("metadata", {}).get("data_freshness", {})
         market_open = freshness.get("market_open", False)
@@ -1069,6 +1146,7 @@ class RiskDashboard:
         .category-macro {{ background: #bee3f8; color: #2c5282; }}
         .category-commodity {{ background: #fbd38d; color: #744210; }}
         .category-panic {{ background: #fbb6ce; color: #702459; }}
+        .category-crypto {{ background: #b794f6; color: #44337a; }}
 
         .asset-grid {{
             display: grid;
@@ -1161,6 +1239,11 @@ class RiskDashboard:
                 <h3>Trend Warnings</h3>
                 <div class="value">{trend_warnings}/{len(self.trend_indicators)}</div>
                 <div class="label">{'Some Weakness' if trend_warnings > 0 else 'All Strong'}</div>
+            </div>
+            <div class="summary-card {'warning' if crypto_advanced_warnings > 0 else 'normal'}">
+                <h3>Crypto Advanced</h3>
+                <div class="value">{crypto_advanced_warnings}/{len(self.crypto_advanced_indicators)}</div>
+                <div class="label">{'Active Signals' if crypto_advanced_warnings > 0 else 'Normal'}</div>
             </div>
         </div>
 

@@ -1,0 +1,18 @@
+{
+  "tickers": [
+    "NVDA",
+    "BTC-USD",
+    "ETH-USD",
+    "XMR-USD",
+    "XRP-USD",
+    "ADA-USD",
+    "DOT-USD",
+    "ATOM-USD"
+  ],
+  "tickers_sold": [
+    "SMCI",
+    "IYW",
+    "SWPPX",
+    "TSM"
+  ]
+}
